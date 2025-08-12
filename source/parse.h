@@ -610,6 +610,14 @@ struct expression_node
         return expr->is_fold_expression();
     }
 
+    auto is_assignment_expression() const
+        -> bool
+    {
+        //  For now this is always true; in the future I plan to add
+        //  a sibling grammar production for try-expressions
+        return true;
+    }
+
     auto get_assignment_expression() const
         -> assignment_expression_node*
     {
@@ -2353,6 +2361,72 @@ struct iteration_statement_node
     // type(s) used in a std::unique_ptr as a member
     ~iteration_statement_node();
 
+    auto get_label() const
+        -> token const*
+    {
+        return label;
+    }
+
+    auto has_next() const
+        -> bool
+    {
+        return next_expression.get() != nullptr;
+    }
+
+    auto get_next_expression() const
+        -> assignment_expression_node*
+    {
+        return next_expression.get();
+    }
+
+    auto is_do() const
+        -> bool
+    {
+        return *identifier == "do";
+    }
+
+    auto is_while() const
+        -> bool
+    {
+        return *identifier == "while";
+    }
+
+    auto get_do_while_condition() const
+        -> logical_or_expression_node*
+    {
+        return condition.get();
+    }
+
+    auto get_do_while_body() const
+        -> compound_statement_node*
+    {
+        return statements.get();
+    }
+
+    auto is_for() const
+        -> bool
+    {
+        return *identifier == "for";
+    }
+
+    auto get_for_range() const
+        -> expression_node*
+    {
+        return range.get();
+    }
+
+    auto get_for_parameter() const
+        -> parameter_declaration_node*
+    {
+        return parameter.get();
+    }
+
+    auto get_for_body() const
+        -> statement_node*
+    {
+        return body.get();
+    }
+
     auto position() const
         -> source_position
     {
@@ -3831,7 +3905,7 @@ public:
     auto is_polymorphic() const // has base types or virtual functions
         -> bool
     {
-        for (auto& decl : get_type_scope_declarations()) {
+        for (auto& decl : get_nested_declarations()) {
             if (
                 decl->has_name("this")
                 || decl->is_virtual_function()
@@ -3858,7 +3932,7 @@ public:
         }
 
         //  Else if we have a copy constructor, we're copyable
-        for (auto& decl : get_type_scope_declarations())
+        for (auto& decl : get_nested_declarations())
         if  (decl->is_constructor_with_that())
         {
             return false;
@@ -3868,15 +3942,17 @@ public:
         return true;
     }
 
-    auto parent_is_function   () const -> bool
+    auto parent_is_function           () const -> bool
         { return  parent_declaration && parent_declaration->type.index() == a_function;  }
-    auto parent_is_object     () const -> bool
+    auto parent_is_object             () const -> bool
         { return  parent_declaration && parent_declaration->type.index() == an_object;   }
-    auto parent_is_type       () const -> bool
+    auto parent_is_type               () const -> bool
         { return  parent_declaration && parent_declaration->type.index() == a_type;      }
-    auto parent_is_namespace  () const -> bool
+    auto parent_is_namespace          () const -> bool
         { return !parent_declaration || parent_declaration->type.index() == a_namespace; }
-    auto parent_is_alias      () const -> bool
+    auto parent_is_nonglobal_namespace() const -> bool
+        { return parent_declaration && parent_declaration->type.index() == a_namespace; }
+    auto parent_is_alias              () const -> bool
         { return  parent_declaration && parent_declaration->type.index() == an_alias;    }
 
     auto parent_is_type_alias     () const -> bool
@@ -3912,11 +3988,11 @@ private:
     //  think of right now to write the following two get_
     //  functions (without duplicating their bodies, and
     //  without resorting to const_casts)
-    auto gather_type_scope_declarations(which w) const
+    auto gather_nested_declarations(which w) const
         -> std::vector<declaration_node*>
     {
         if (
-            !is_type()
+            (!is_type() && !is_namespace())
             || !initializer
             || !initializer->is_compound()
             )
@@ -3933,10 +4009,6 @@ private:
             auto decl = o->get_if<declaration_node>();
             if (decl)
             {
-                assert(
-                    !decl->is_namespace()
-                    && "ICE: a type shouldn't be able to contain a namespace"
-                );
                 if (
                     (w & functions  && decl->is_function())
                     || (w & objects && decl->is_object()  )
@@ -3953,19 +4025,19 @@ private:
     }
 
 public:
-    auto get_type_scope_declarations(which w = all)
+    auto get_nested_declarations(which w = all)
         -> std::vector<declaration_node*>
     {
         //  Only want to return the gather_ results as
         //  non-const* in a non-const function
-        return gather_type_scope_declarations(w);
+        return gather_nested_declarations(w);
     }
 
-    auto get_type_scope_declarations(which w = all) const
+    auto get_nested_declarations(which w = all) const
         -> std::vector<declaration_node const*>
     {
         //  Convert the gather_ results to const*
-        auto tmp = gather_type_scope_declarations(w);
+        auto tmp = gather_nested_declarations(w);
         return {tmp.begin(), tmp.end()};
     }
 
@@ -4045,7 +4117,7 @@ public:
 
         //  Look for a name match and if so remember the type,
         //  and look for a base type after that match
-        auto objects               = decl->get_type_scope_declarations();
+        auto objects               = decl->get_nested_declarations();
         auto found_name            = false;
         auto found_later_base_type = false;
 
@@ -4420,13 +4492,13 @@ public:
     }
 
     auto get_function_parameters()
-        -> std::vector<parameter_declaration_node const*>
+        -> std::vector<parameter_declaration_node*>
     {
         if (!is_function()) {
             return {};
         }
 
-        auto ret = std::vector<parameter_declaration_node const*>{};
+        auto ret = std::vector<parameter_declaration_node*>{};
         for (auto& param : std::get<a_function>(type)->parameters->parameters) {
             ret.push_back( param.get() );
         }
@@ -4434,7 +4506,7 @@ public:
     }
 
     auto get_function_returns()
-        -> std::vector<parameter_declaration_node const*>
+        -> std::vector<parameter_declaration_node*>
     {
         if (!is_function()) {
             return {};
@@ -4445,7 +4517,7 @@ public:
             return {};
         }
 
-        auto ret = std::vector<parameter_declaration_node const*>{};
+        auto ret = std::vector<parameter_declaration_node*>{};
         for (auto& param : (*returns)->parameters) {
             ret.push_back( param.get() );
         }
@@ -6512,7 +6584,7 @@ public:
 
 
     //-----------------------------------------------------------------------
-    //  parse_one_statement
+    //  parse_one_declaration
     //
     //  tokens              input tokens for this section of Cpp2 source code
     //  generated_tokens    a shared place to store generated tokens
@@ -6536,8 +6608,10 @@ public:
             //  and there were no new errors, and all tokens were consumed
             auto errors_size = std::ssize(errors);
             pos = 0;
-            if (auto d = statement();
-                d
+
+            auto d = std::unique_ptr<statement_node>{};
+            statement(d);
+            if (d
                 && std::ssize(errors) == errors_size
                 && done()
                 )
@@ -8054,10 +8128,7 @@ private:
             return {};
         }
 
-        if (auto s = compound_statement()) {
-            n->true_branch = std::move(s);
-        }
-        else {
+        if (!compound_statement(n->true_branch)) {
             error("invalid if branch body", true, {}, true);
             return {};
         }
@@ -8085,8 +8156,8 @@ private:
                 return {};
             }
 
-            if (auto s = compound_statement( source_position{}, true )) {
-                n->false_branch = std::move(s);
+            compound_statement(n->false_branch, source_position{}, true );
+            if (n->false_branch) {
                 n->has_source_false_branch = true;
             }
             else {
@@ -8214,7 +8285,8 @@ private:
         };
 
         auto handle_compound_statement = [&]() -> bool {
-            auto s = compound_statement();
+            auto s = std::unique_ptr<compound_statement_node>{};
+            compound_statement(s);
             if (!s) {
                 error("invalid while loop body", true, {}, true);
                 return false;
@@ -8304,7 +8376,7 @@ private:
             }
             next();     // eat ')'
 
-            n->body = statement();
+            statement(n->body);
             if (!n->body) {
                 error("invalid for..do loop body", false, source_position{}, true);
                 return {};
@@ -8377,7 +8449,9 @@ private:
         n->equal_sign = curr().position();
         next();
 
-        if (auto s = statement(true, n->equal_sign)) {
+        auto s = std::unique_ptr<statement_node>{};
+        statement(s, true, n->equal_sign);
+        if (s) {
             n->statement = std::move(s);
         }
         else {
@@ -8593,20 +8667,22 @@ private:
     //GTODO     try-block
     //G
     auto statement(
-        bool                     semicolon_required    = true,
-        source_position          equal_sign            = source_position{},
-        bool                     parameters_allowed    = false,
-        compound_statement_node* compound_parent       = nullptr,
-        bool                     allow_angle_operators = true
+        std::unique_ptr<statement_node>& n, // using an inout param makes partial parses available to reflection
+        bool                             semicolon_required    = true,
+        source_position                  equal_sign            = source_position{},
+        bool                             parameters_allowed    = false,
+        compound_statement_node*         compound_parent       = nullptr,
+        bool                             allow_angle_operators = true
     )
-        -> std::unique_ptr<statement_node>
+        -> void
     {
+        n = std::make_unique<statement_node>(compound_parent);
+
         if (!done() && curr().type() == lexeme::Semicolon) {
             error("empty statement is not allowed - remove extra semicolon");
-            return {};
+            n = nullptr;
+            return;
         }
-
-        auto n = std::make_unique<statement_node>(compound_parent);
 
         //  If a parameter list is allowed here, try to parse one
         if (parameters_allowed) {
@@ -8620,7 +8696,8 @@ private:
                         )
                     {
                         error("(temporary alpha limitation) parameters scoped to a block/statement must be 'in' (the default), 'copy', or 'inout'", false);
-                        return {};
+                        n = nullptr;
+                        return;
                     }
                 }
             }
@@ -8631,70 +8708,75 @@ private:
         if (auto s = selection_statement()) {
             n->statement = std::move(s);
             assert (n->is_selection());
-            return n;
+            return;
         }
 
         else if (auto s = using_statement()) {
             n->statement = std::move(s);
             assert (n->is_using());
-            return n;
+            return;
         }
 
         else if (auto i = inspect_expression(false)) {
             n->statement = std::move(i);
             assert (n->is_inspect());
-            return n;
+            return;
         }
 
         else if (auto s = return_statement()) {
             n->statement = std::move(s);
             assert (n->is_return());
-            return n;
+            return;
         }
-
+        
         else if (auto s = jump_statement()) {
             n->statement = std::move(s);
             assert (n->is_jump());
-            return n;
+            return;
         }
 
         else if (auto s = iteration_statement()) {
             n->statement = std::move(s);
             assert (n->is_iteration());
-            return n;
+            return;
         }
 
-        else if (auto s = compound_statement(equal_sign)) {
-            n->statement = std::move(s);
+        else if (   // here we are careful to pass through the actual statement, so reflection can see it being built
+            (n->statement = std::unique_ptr<compound_statement_node>{}).index() == statement_node::compound
+            && compound_statement(std::get<statement_node::compound>(n->statement), equal_sign)
+            )
+        {
             assert (n->is_compound());
-            return n;
+            return;
         }
 
         else if (auto s = contract()) {
             if (*s->kind != "assert") {
                 error("only 'assert' contracts are allowed at statement scope");
-                return {};
+                n = nullptr;
+                return;
             }
             if (curr().type() != lexeme::Semicolon) {
                 error("missing ';' after contract-statement");
-                return {};
+                n = nullptr;
+                return;
             }
             next();
             n->statement = std::move(s);
             assert (n->is_contract());
-            return n;
+            return;
         }
 
         else if (auto s = declaration(semicolon_required, false, false, n.get())) {
             n->statement = std::move(s);
             assert (n->is_declaration());
-            return n;
+            return;
         }
 
         else if (auto s = expression_statement(semicolon_required, allow_angle_operators)) {
             n->statement = std::move(s);
             assert (n->is_expression());
-            return n;
+            return;
         }
 
         else {
@@ -8706,7 +8788,8 @@ private:
             {
                 error("declaring multiple names at once is not currently supported");
             }
-            return {};
+            n = nullptr;
+            return;
         }
     }
 
@@ -8719,10 +8802,11 @@ private:
     //G     statement-seq statement
     //G
     auto compound_statement(
-        source_position equal_sign                      = source_position{},
-        bool            allow_single_unbraced_statement = false
+        std::unique_ptr<compound_statement_node>& n, // using an inout param makes partial parses available to reflection
+        source_position                           equal_sign                      = source_position{},
+        bool                                      allow_single_unbraced_statement = false
     )
-        -> std::unique_ptr<compound_statement_node>
+        -> bool
     {
         const bool is_braced = curr().type() == lexeme::LeftBrace;
         if (
@@ -8730,10 +8814,10 @@ private:
             && !allow_single_unbraced_statement
             )
         {
-            return {};
+            return false;
         }
 
-        auto n = std::make_unique<compound_statement_node>();
+        n = std::make_unique<compound_statement_node>();
         if (!is_braced) {
             n->body_indent = curr().position().colno-1;
         }
@@ -8766,14 +8850,15 @@ private:
         {
             //  Only inside a compound-statement, a
             //  contained statement() may have parameters
-            auto s = statement(true, source_position{}, true, n.get());
+            auto s = std::unique_ptr<statement_node>{};
+            statement(s, true, source_position{}, true, n.get());
             if (!s) {
 
                 // Only add a general error when no specific one already exists
                 if(!has_error()) {
                     error("invalid statement encountered inside a compound-statement", true);
                 }
-                return {};
+                return false;
             }
             n->statements.push_back( std::move(s) );
         }
@@ -8783,7 +8868,7 @@ private:
             n->close_brace = curr().position();
             next();
         }
-        return n;
+        return true;
     }
 
 
@@ -9813,13 +9898,15 @@ private:
                     }
                 }
 
-                if (!(n->initializer = statement(
+                statement(
+                    n->initializer,
                     semicolon_required,
                     n->equal_sign,
                     false,
                     nullptr,
                     !is_template_parameter
-                )))
+                );
+                if (!n->initializer)
                 {
                     error(
                         "ill-formed initializer",
@@ -9857,7 +9944,8 @@ private:
             )
         {
             auto start_pos = pos;
-            auto stmt = statement();
+            auto stmt = std::unique_ptr<statement_node>{};
+            statement(stmt);
             auto at_a_statement = stmt != nullptr && !stmt->is_declaration();
             pos = start_pos;    // backtrack no matter what, we're just peeking here
 
