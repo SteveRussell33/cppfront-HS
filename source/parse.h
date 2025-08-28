@@ -2698,6 +2698,8 @@ struct statement_node
     auto is_inspect    () const -> bool { return statement.index() == inspect;     }
     auto is_jump       () const -> bool { return statement.index() == jump;        }
 
+    auto get_parameters()
+        -> std::vector<parameter_declaration_node*>;
     template<typename Node>
     auto get_if()
         -> Node*
@@ -2986,6 +2988,19 @@ struct parameter_declaration_list_node
         v.end(*this, depth);
     }
 };
+
+
+auto statement_node::get_parameters()
+    -> std::vector<parameter_declaration_node*>
+{
+    auto ret = std::vector<parameter_declaration_node*>{};
+    if (parameters) {
+        for (auto& param : parameters->parameters) {
+            ret.push_back( param.get() );
+        }
+    }
+    return ret;
+}
 
 
 auto statement_node::visit(auto& v, int depth)
@@ -3542,6 +3557,7 @@ struct declaration_node
     //  Attributes currently configurable only via metafunction API,
     //  not directly in the base language grammar
     bool member_function_generation = true;
+    bool ref_qualifier_generation   = true;
 
     //  Cache some context
     bool is_a_template_parameter  = false;
@@ -3635,6 +3651,12 @@ struct declaration_node
         -> void
     {
         member_function_generation = false;
+    }
+
+    auto type_disable_ref_qualifier_generation()
+        -> void
+    {
+        ref_qualifier_generation = false;
     }
 
     auto object_type() const
